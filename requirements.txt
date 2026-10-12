@@ -1,0 +1,17 @@
+pandas==2.3.3
+numpy==2.2.6
+scikit-learn==1.7.2
+joblib==1.5.2
+pyyaml==6.0.3
+python-dotenv==1.2.3
+mlflow==3.1.0
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pydantic==2.11.4
+httpx==0.28.1
+evidently==0.7.14
+streamlit==1.45.1
+dvc==3.67.1
+dvc-s3==3.3.0
+boto3==1.38.27
+psycopg2-binary==2.9.10

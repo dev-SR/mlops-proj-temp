@@ -1,0 +1,16 @@
+.venv
+.git
+.dvc/cache
+.dvc/tmp
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+airflow/logs
+mlruns
+secrets
+.env
+screenshots
+*.md
+tests

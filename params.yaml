@@ -1,0 +1,27 @@
+seed: 42
+
+prepare:
+  test_size: 0.2
+  target: Revenue
+  drop_columns: []
+  categorical_columns:
+    - Month
+    - OperatingSystems
+    - Browser
+    - Region
+    - TrafficType
+    - VisitorType
+    - Weekend
+  stratify: true
+
+train:
+  model: random_forest   # random_forest | logistic_regression
+  n_estimators: 200
+  max_depth: 8
+  min_samples_leaf: 2
+  class_weight: balanced
+
+evaluate:
+  threshold: 0.5
+  min_f1: 0.40
+  slice_column: VisitorType

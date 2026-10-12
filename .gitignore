@@ -1,0 +1,57 @@
+# --- generated artifacts -----------------------------------------------
+artifacts/
+mlruns/
+mlflow.db
+*.pkl
+*.joblib
+!models/.gitkeep
+
+# --- data ---------------------------------------------------------------
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+!data/raw/.gitkeep
+
+# --- logs / reports -----------------------------------------------------
+logs/*
+!logs/.gitkeep
+reports/*
+!reports/.gitkeep
+airflow/logs/*
+!airflow/logs/.gitkeep
+
+# --- python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+dist/
+build/
+
+# --- secrets ------------------------------------------------------------
+.env
+secrets/
+*.pem
+*.key
+
+# --- os / editor --------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Streamlit ----------------------------------------------------------
+.streamlit/secrets.toml
+
+# --- DVC local remotes --------------------------------------------------
+.dvc/tmp
+.dvc/cache

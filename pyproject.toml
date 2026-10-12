@@ -1,0 +1,57 @@
+[project]
+name = "shoppers"
+version = "0.1.0"
+description = "Online Shoppers Purchasing Intention MLOps project (L6HXIR)"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.3.3,<3",
+    "numpy>=2.2.6,<3",
+    "scikit-learn>=1.7.2,<2",
+    "joblib>=1.6.0,<2",
+    "pyyaml>=5.3.1,<7",
+    "python-dotenv>=1.2.3,<2",
+    "mlflow>=3.1,<4",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "pydantic>=2.13,<3",
+    "evidently>=0.4,<1",
+    "streamlit>=1.40,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "dvc[s3]>=3.55,<4",
+    "pre-commit>=4.0,<5",
+    "pytest>=8.4,<9",
+    "coverage>=7.16,<8",
+    "flake8>=7.4,<8",
+    "httpx>=0.27,<1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src", "tests"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_empty = true
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
