@@ -1,0 +1,300 @@
+# Start:  cp .env.example .env && mkdir -p secrets && cp secrets_example/* secrets/
+#         docker compose up -d
+# Stop:   docker compose down          (volumes kept)
+#         docker compose down -v       (wipe data)
+#
+# NETWORK: containers use service DNS (minio:9000, postgres:5432, mlflow:5000)
+#          host uses published ports (localhost:5500, :8000, :8501, :8080)
+
+x-env: &x-env
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ENDPOINT_HOST: http://localhost:9000
+  DVC_BUCKET: ${DVC_BUCKET:-dvc}
+  DVC_REMOTE: ${DVC_REMOTE:-storage}
+  NO_PROXY: minio,localhost
+  MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow}
+  MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB:-mlflow}
+  PYTHONUNBUFFERED: "1"
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  MLFLOW_HOST_TRACKING_URI: http://mlflow:5000
+  MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-shoppers-purchasing-intention}
+  MLFLOW_REGISTERED_MODEL: ${MLFLOW_REGISTERED_MODEL:-shoppers}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+secrets:
+  minio_root_password:
+    file: ./secrets/minio_root_password.txt
+  postgres_admin_password:
+    file: ./secrets/postgres_admin_password.txt
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shoppers-postgres
+    environment: *x-env
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./src/docker/init-airflow-db.sql:/docker-entrypoint-initdb.d/init-airflow-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: coollabsio/minio:latest
+    container_name: shoppers-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      <<: *x-env
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets:
+      - minio_root_password
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  create-buckets:
+    build:
+      context: .
+      dockerfile: src/docker/dvc_dockerfile
+    secrets:
+      - minio_root_password
+    image: shoppers-mlops:local
+    pull_policy: never
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment: *x-env
+    restart: "no"
+
+  set-dvc-remote:
+    image: shoppers-mlops:local
+    pull_policy: never
+    depends_on:
+      create-buckets:
+        condition: service_completed_successfully
+    environment:
+      <<: *x-env
+    secrets:
+      - minio_root_password
+    volumes: [".:/workspace"]
+    working_dir: /workspace
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        export MINIO_ROOT_PASSWORD="$$(cat /run/secrets/minio_root_password)"
+        dvc remote add --local -d -f "$$DVC_REMOTE" "s3://$$DVC_BUCKET" || true
+        dvc remote modify --local "$$DVC_REMOTE" endpointurl "$$MINIO_ENDPOINT_HOST"
+        dvc remote modify --local "$$DVC_REMOTE" access_key_id "$${MINIO_ROOT_USER}"
+        dvc remote modify --local "$$DVC_REMOTE" secret_access_key "$${MINIO_ROOT_PASSWORD}"
+        dvc remote list --local
+    restart: "no"
+
+  mlflow:
+    build:
+      dockerfile: ./src/docker/mlflow_dockerfile
+    secrets:
+      - postgres_admin_password
+    container_name: shoppers-mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      create-buckets:
+        condition: service_completed_successfully
+    environment: *x-env
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mlflow}
+      --artifacts-destination s3://${MLFLOW_BUCKET}
+      --serve-artifacts
+    ports:
+      - "${MLFLOW_PORT:-5500}:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shoppers-api
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment: *x-env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./metrics:/app/metrics
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./params.yaml:/app/params.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shoppers-streamlit
+    depends_on:
+      api:
+        condition: service_healthy
+    environment: *x-env
+    working_dir: /app
+    command: ["streamlit", "run", "app/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./metrics:/app/metrics
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    restart: unless-stopped
+
+  airflow-init:
+    image: apache/airflow:2.10.5-python3.12
+    container_name: shoppers-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        psql "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/postgres" \
+          -tc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1 \
+          || psql "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/postgres" \
+             -c "CREATE DATABASE airflow"
+        airflow db migrate
+        airflow users create \
+          --username $${_AIRFLOW_WWW_USER_USERNAME:-airflow} \
+          --password $${_AIRFLOW_WWW_USER_PASSWORD:-airflow} \
+          --firstname Shoppers \
+          --lastname Admin \
+          --role Admin \
+          --email admin@example.com || true
+    environment:
+      <<: *x-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      SHOPPERS_LOGS_DIR: /opt/airflow/logs_shoppers
+      SHOPPERS_REPORTS_DIR: /opt/airflow/reports
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
+      - ./logs:/opt/airflow/logs_shoppers
+      - ./reports:/opt/airflow/reports
+      - ./params.yaml:/opt/airflow/params.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    user: "0:0"
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5-python3.12
+    container_name: shoppers-airflow-web
+    command: webserver
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    environment:
+      <<: *x-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      PYTHONPATH: /opt/airflow
+      SHOPPERS_LOGS_DIR: /opt/airflow/logs_shoppers
+      SHOPPERS_REPORTS_DIR: /opt/airflow/reports
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
+      - ./logs:/opt/airflow/logs_shoppers
+      - ./reports:/opt/airflow/reports
+      - ./params.yaml:/opt/airflow/params.yaml:ro
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.5-python3.12
+    container_name: shoppers-airflow-scheduler
+    command: scheduler
+    environment:
+      <<: *x-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      PYTHONPATH: /opt/airflow
+      SHOPPERS_LOGS_DIR: /opt/airflow/logs_shoppers
+      SHOPPERS_REPORTS_DIR: /opt/airflow/reports
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
+      - ./logs:/opt/airflow/logs_shoppers
+      - ./reports:/opt/airflow/reports
+      - ./params.yaml:/opt/airflow/params.yaml:ro
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+  pg-data:
