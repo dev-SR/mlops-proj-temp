@@ -1,0 +1,7 @@
+.venv/
+secrets/
+.env
+__pycache__/
+mlruns/
+logs/
+reports/

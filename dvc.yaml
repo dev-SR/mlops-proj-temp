@@ -1,0 +1,62 @@
+# Three-step DAG: prepare -> train -> evaluate
+#
+#   dvc dag
+#   dvc repro
+#   dvc metrics diff HEAD~1
+
+stages:
+  prepare:
+    cmd: python -m src.shoppers.prepare
+    deps:
+      - src/shoppers/prepare.py
+      - src/shoppers/config.py
+      - data/raw/shoppers.csv
+    params:
+      - seed
+      - prepare.test_size
+      - prepare.target
+      - prepare.drop_columns
+      - prepare.categorical_columns
+      - prepare.stratify
+    outs:
+      - data/processed/train.csv
+      - data/processed/valid.csv
+
+  train:
+    cmd: python -m src.shoppers.train
+    deps:
+      - src/shoppers/train.py
+      - src/shoppers/scoring.py
+      - src/shoppers/config.py
+      - data/processed/train.csv
+      - data/processed/valid.csv
+    params:
+      - seed
+      - prepare.target
+      - train.model
+      - train.n_estimators
+      - train.max_depth
+      - train.min_samples_leaf
+      - train.class_weight
+    outs:
+      - models/model.joblib
+      - models/mlflow_run_id:
+          cache: false
+
+  evaluate:
+    cmd: python -m src.shoppers.evaluate
+    deps:
+      - src/shoppers/evaluate.py
+      - src/shoppers/scoring.py
+      - src/shoppers/config.py
+      - models/model.joblib
+      - models/mlflow_run_id
+      - data/processed/valid.csv
+    params:
+      - prepare.target
+      - evaluate.threshold
+      - evaluate.min_f1
+      - evaluate.slice_column
+    metrics:
+      - metrics/metrics.json:
+          cache: false

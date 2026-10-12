@@ -1,0 +1,2 @@
+# ignore raw/processed contents but keep DVC pointers and structure
+/interim
