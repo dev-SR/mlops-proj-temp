@@ -1,0 +1,72 @@
+"""One-shot helper: create MinIO buckets for DVC and MLflow artifacts."""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError, EndpointConnectionError
+
+
+class MinIO:
+    def access_to_s3(self) -> Any:
+        password: str = Path("/run/secrets/minio_root_password").read_text().strip()
+        return boto3.client(
+            "s3",
+            endpoint_url="http://minio:9000",
+            aws_access_key_id=os.environ["MINIO_ROOT_USER"],
+            aws_secret_access_key=password,
+            region_name="us-east-1",
+            config=Config(s3={"addressing_style": "path"}),
+        )
+
+    def waiting_for_minio(self, s3: Any) -> None:
+        for _ in range(30):
+            try:
+                s3.list_buckets()
+                break
+            except (EndpointConnectionError, ClientError):
+                time.sleep(2)
+        else:
+            raise SystemExit("Cannot access the MinIO")
+
+    def create_s3_bucket(self, s3: Any, bucket: str) -> None:
+        try:
+            s3.create_bucket(Bucket=bucket)
+        except ClientError as e:
+            if e.response["Error"]["Code"] not in (
+                "BucketAlreadyOwnedByYou",
+                "BucketAlreadyExists",
+            ):
+                raise
+
+    def set_anon_policy(self, s3: Any, bucket: str) -> None:
+        try:
+            s3.delete_bucket_policy(Bucket=bucket)
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchBucketPolicy":
+                raise
+
+
+def main() -> None:
+    dvc_bucket: str = os.environ["DVC_BUCKET"]
+    mlflow_bucket: str = os.environ["MLFLOW_BUCKET"]
+    buckets: list[str] = [dvc_bucket, mlflow_bucket]
+    minio = MinIO()
+    s3_access = minio.access_to_s3()
+    minio.waiting_for_minio(s3_access)
+
+    for bucket in buckets:
+        minio.create_s3_bucket(s3_access, bucket)
+        minio.set_anon_policy(s3_access, bucket)
+        print(f"Bucket is ready: {bucket}")
+
+    print(f"Buckets are ready: {buckets}")
+
+
+if __name__ == "__main__":
+    main()
