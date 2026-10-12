@@ -1,0 +1,5 @@
+outs:
+- md5: d8d2cacb2e125ca5c4187a6e01d888c6
+  size: 375197
+  hash: md5
+  path: shoppers.csv
