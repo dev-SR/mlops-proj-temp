@@ -1,0 +1,14 @@
+{
+  "accuracy": 0.8756,
+  "f1": 0.6598,
+  "f1_slice_VisitorType_New_Visitor": 0.8,
+  "f1_slice_VisitorType_Returning_Visitor": 0.6201,
+  "min_f1": 0.4,
+  "n_valid": 796,
+  "positive_rate": 0.157,
+  "precision": 0.5783,
+  "promoted": true,
+  "recall": 0.768,
+  "roc_auc": 0.9127,
+  "threshold": 0.5
+}
